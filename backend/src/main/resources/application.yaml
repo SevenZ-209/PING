@@ -1,3 +1,11 @@
 spring:
   application:
     name: backend
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ping
+    username: ping
+    password: ${DB_PASSWORD}
+
+  flyway:
+    enabled: true

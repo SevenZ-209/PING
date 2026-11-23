@@ -1,6 +1,9 @@
 
 package com.ping.backend.service;
+
+import com.ping.backend.entity.EmailVerificationToken;
 import com.ping.backend.repository.EmailVerificationTokenRepository;
+import com.ping.backend.repository.UserRepository;
 import com.ping.backend.security.VerificationTokenGenerator;
 
 import org.springframework.stereotype.Service;
@@ -15,35 +18,50 @@ public class EmailVerificationService {
 
     private static final Duration TOKEN_TTL = Duration.ofHours(24);
 
-    private final EmailVerificationTokenRepository repository;
+    private final EmailVerificationTokenRepository tokenRepository;
+    private final UserRepository userRepository;
     private final VerificationTokenGenerator tokenGenerator;
 
     public EmailVerificationService(
-            EmailVerificationTokenRepository repository,
+            EmailVerificationTokenRepository tokenRepository,
+            UserRepository userRepository,
             VerificationTokenGenerator tokenGenerator
     ) {
-        this.repository = repository;
+        this.tokenRepository = tokenRepository;
+        this.userRepository = userRepository;
         this.tokenGenerator = tokenGenerator;
     }
 
     @Transactional
     public String issueToken(UUID userId) {
-        repository.lockUser(userId);
+
+        userRepository.findByIdForUpdate(userId)
+                .orElseThrow(() ->
+                        new IllegalArgumentException("User not found"));
 
         Instant now = Instant.now();
 
         String rawToken = tokenGenerator.generate();
         String tokenHash = tokenGenerator.hash(rawToken);
 
-        repository.invalidateActiveTokens(userId, now);
+        var activeTokens = tokenRepository
+                .findByUserIdAndConsumedAtIsNullAndInvalidatedAtIsNull(userId);
 
-        repository.save(
+        for (EmailVerificationToken token : activeTokens) {
+            token.invalidate(now);
+        }
+
+        tokenRepository.flush();
+
+        EmailVerificationToken newToken = new EmailVerificationToken(
                 UUID.randomUUID(),
                 userId,
                 tokenHash,
                 now,
                 now.plus(TOKEN_TTL)
         );
+
+        tokenRepository.save(newToken);
 
         return rawToken;
     }

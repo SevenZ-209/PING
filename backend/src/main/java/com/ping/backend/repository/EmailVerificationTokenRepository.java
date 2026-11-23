@@ -1,19 +1,14 @@
 package com.ping.backend.repository;
 
-import java.time.Instant;
+import com.ping.backend.entity.EmailVerificationToken;
+import org.springframework.data.jpa.repository.JpaRepository;
+import java.util.List;
 import java.util.UUID;
 
-public interface EmailVerificationTokenRepository {
+public interface EmailVerificationTokenRepository
+        extends JpaRepository<EmailVerificationToken, UUID> {
 
-    void lockUser(UUID userId);
-
-    void invalidateActiveTokens(UUID userId, Instant now);
-
-    void save(
-            UUID id,
-            UUID userId,
-            String tokenHash,
-            Instant createdAt,
-            Instant expiresAt
-    );
+    List<EmailVerificationToken>
+    findByUserIdAndConsumedAtIsNullAndInvalidatedAtIsNull(UUID userId);
 }
+

@@ -1,5 +1,4 @@
-
-package com.ping.backend.auth;
+package com.ping.backend.repository;
 
 import java.time.Instant;
 import java.util.UUID;

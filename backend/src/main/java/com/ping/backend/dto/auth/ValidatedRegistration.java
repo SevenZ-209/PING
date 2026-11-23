@@ -1,5 +1,5 @@
 
-package com.ping.backend.auth;
+package com.ping.backend.dto.auth;
 
 public record ValidatedRegistration(
         String email,

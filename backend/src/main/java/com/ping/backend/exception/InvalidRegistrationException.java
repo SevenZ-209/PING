@@ -1,5 +1,5 @@
 
-package com.ping.backend.auth;
+package com.ping.backend.exception;
 
 public class InvalidRegistrationException extends RuntimeException {
 

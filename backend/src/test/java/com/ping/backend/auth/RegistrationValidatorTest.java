@@ -1,5 +1,9 @@
 
 package com.ping.backend.auth;
+import com.ping.backend.validation.RegistrationValidator;
+import com.ping.backend.dto.auth.RegisterRequest;
+import com.ping.backend.dto.auth.ValidatedRegistration;
+import com.ping.backend.exception.InvalidRegistrationException;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;

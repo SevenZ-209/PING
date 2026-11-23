@@ -1,8 +1,11 @@
-
 package com.ping.backend.auth;
-
-import com.ping.backend.user.User;
-import com.ping.backend.user.UserRepository;
+import com.ping.backend.service.AuthService;
+import com.ping.backend.entity.User;
+import com.ping.backend.repository.UserRepository;
+import com.ping.backend.dto.auth.RegisterRequest;
+import com.ping.backend.validation.RegistrationValidator;
+import com.ping.backend.exception.EmailAlreadyExistsException;
+import com.ping.backend.exception.InvalidRegistrationException;
 import org.junit.jupiter.api.Test;
 import java.util.UUID;
 import org.mockito.ArgumentCaptor;
@@ -16,7 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.mockito.Mock;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.DataIntegrityViolationException;
 
 @ExtendWith(MockitoExtension.class)
 class AuthServiceTest {
@@ -122,7 +125,7 @@ class AuthServiceTest {
                 .isInstanceOf(EmailAlreadyExistsException.class);
 
         verify(userRepository).findByEmail(email);
-        verify(userRepository, never()).save(any(User.class));
+        verify(userRepository, never()).saveAndFlush(any(User.class));
         verifyNoInteractions(passwordEncoder);
     }
 
@@ -149,7 +152,7 @@ class AuthServiceTest {
         ArgumentCaptor<User> userCaptor =
                 ArgumentCaptor.forClass(User.class);
 
-        verify(userRepository).save(userCaptor.capture());
+        verify(userRepository).saveAndFlush(userCaptor.capture());
 
         User savedUser = userCaptor.getValue();
 
@@ -188,7 +191,7 @@ class AuthServiceTest {
         ArgumentCaptor<User> userCaptor =
                 ArgumentCaptor.forClass(User.class);
 
-        verify(userRepository).save(userCaptor.capture());
+        verify(userRepository).saveAndFlush(userCaptor.capture());
 
         assertThat(userCaptor.getValue().getEmail())
                 .isEqualTo(normalizedEmail);
@@ -271,8 +274,9 @@ class AuthServiceTest {
     }
 
 
+
     @Test
-    void register_whenInsertHitsDuplicateKey_throwsEmailAlreadyExistsException() {
+    void register_whenDatabaseRejectsDuplicateEmail_throwsEmailAlreadyExistsException() {
         String email = "race@example.com";
 
         RegisterRequest request = new RegisterRequest(
@@ -287,16 +291,18 @@ class AuthServiceTest {
         when(passwordEncoder.encode("password123"))
                 .thenReturn("hashed-password");
 
-        doThrow(new DuplicateKeyException("Duplicate email"))
-                .when(userRepository)
-                .save(any(User.class));
+        when(userRepository.saveAndFlush(any(User.class)))
+                .thenThrow(new DataIntegrityViolationException(
+                        "Duplicate email"
+                ));
 
         assertThatThrownBy(() -> authService.register(request))
                 .isInstanceOf(EmailAlreadyExistsException.class);
 
         verify(userRepository).findByEmail(email);
-        verify(userRepository).save(any(User.class));
+        verify(userRepository).saveAndFlush(any(User.class));
     }
+
 
 
 }

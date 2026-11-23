@@ -1,6 +1,6 @@
 
 package com.ping.backend.auth;
-
+import com.ping.backend.security.VerificationTokenGenerator;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;

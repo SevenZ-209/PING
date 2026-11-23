@@ -1,5 +1,7 @@
 
-package com.ping.backend.auth;
+package com.ping.backend.service;
+import com.ping.backend.repository.EmailVerificationTokenRepository;
+import com.ping.backend.security.VerificationTokenGenerator;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;

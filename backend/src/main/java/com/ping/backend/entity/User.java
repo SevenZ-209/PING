@@ -1,18 +1,42 @@
 
-package com.ping.backend.user;
+package com.ping.backend.entity;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
 
 import java.time.Instant;
 import java.util.UUID;
 
-public final class User {
+@Entity
+@Table(name = "users")
+public class User {
 
-    private final UUID id;
-    private final String email;
-    private final String passwordHash;
-    private final String displayName;
-    private final Instant createdAt;
-    private final Instant updatedAt;
-    private final Instant emailVerifiedAt;
+    @Id
+    @Column(name = "id", nullable = false)
+    private UUID id;
+
+    @Column(name = "email", nullable = false, unique = true, length = 255)
+    private String email;
+
+    @Column(name = "password_hash")
+    private String passwordHash;
+
+    @Column(name = "display_name", nullable = false, length = 100)
+    private String displayName;
+
+    @Column(name = "created_at", nullable = false)
+    private Instant createdAt;
+
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
+
+    @Column(name = "email_verified_at")
+    private Instant emailVerifiedAt;
+
+    protected User() {
+    }
 
     public User(
             UUID id,

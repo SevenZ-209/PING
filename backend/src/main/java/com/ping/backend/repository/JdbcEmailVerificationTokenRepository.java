@@ -1,5 +1,4 @@
-
-package com.ping.backend.auth;
+package com.ping.backend.repository;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;

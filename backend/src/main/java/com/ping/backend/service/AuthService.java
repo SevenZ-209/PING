@@ -1,11 +1,17 @@
 
-package com.ping.backend.auth;
+package com.ping.backend.service;
 
-import com.ping.backend.user.User;
-import com.ping.backend.user.UserRepository;
+import com.ping.backend.dto.auth.RegisterRequest;
+import com.ping.backend.dto.auth.ValidatedRegistration;
+import com.ping.backend.entity.User;
+import com.ping.backend.exception.EmailAlreadyExistsException;
+import com.ping.backend.repository.UserRepository;
+import com.ping.backend.validation.RegistrationValidator;
+
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.dao.DuplicateKeyException;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -57,12 +63,10 @@ public class AuthService {
                 null
         );
 
-
         try {
-            userRepository.save(newUser);
-        } catch (DuplicateKeyException exception) {
+            userRepository.saveAndFlush(newUser);
+        } catch (DataIntegrityViolationException exception) {
             throw new EmailAlreadyExistsException();
         }
-
     }
 }

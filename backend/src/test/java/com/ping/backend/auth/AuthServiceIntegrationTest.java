@@ -1,7 +1,10 @@
 
 package com.ping.backend.auth;
 
-import com.ping.backend.user.UserRepository;
+import com.ping.backend.service.AuthService;
+import com.ping.backend.repository.UserRepository;
+import com.ping.backend.dto.auth.RegisterRequest;
+import com.ping.backend.exception.EmailAlreadyExistsException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;

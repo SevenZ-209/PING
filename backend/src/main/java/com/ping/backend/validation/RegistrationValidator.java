@@ -1,5 +1,7 @@
-
-package com.ping.backend.auth;
+package com.ping.backend.validation;
+import com.ping.backend.dto.auth.RegisterRequest;
+import com.ping.backend.dto.auth.ValidatedRegistration;
+import com.ping.backend.exception.InvalidRegistrationException;
 
 import org.springframework.stereotype.Component;
 

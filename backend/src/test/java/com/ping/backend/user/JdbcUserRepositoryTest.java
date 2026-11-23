@@ -1,4 +1,8 @@
 package com.ping.backend.user;
+
+import com.ping.backend.entity.User;
+import com.ping.backend.repository.UserRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -80,7 +84,7 @@ class JdbcUserRepositoryTest {
                 null
         );
 
-        userRepository.save(user);
+        userRepository.saveAndFlush(user);
 
         var result = userRepository.findByEmail(email);
 
@@ -120,12 +124,11 @@ class JdbcUserRepositoryTest {
                 null
         );
 
-        userRepository.save(firstUser);
+        userRepository.saveAndFlush(firstUser);
 
-        assertThatThrownBy(() -> userRepository.save(secondUser))
-                .isInstanceOf(
-                        org.springframework.dao.DuplicateKeyException.class
-                );
+        assertThatThrownBy(
+                () -> userRepository.saveAndFlush(secondUser)
+        ).isInstanceOf(DataIntegrityViolationException.class);
     }
 
 

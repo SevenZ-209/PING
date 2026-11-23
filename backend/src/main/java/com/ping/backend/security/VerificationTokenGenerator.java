@@ -1,5 +1,5 @@
 
-package com.ping.backend.auth;
+package com.ping.backend.security;
 
 import org.springframework.stereotype.Component;
 

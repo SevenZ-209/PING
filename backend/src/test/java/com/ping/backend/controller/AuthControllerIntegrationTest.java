@@ -19,6 +19,10 @@ import java.time.OffsetDateTime;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import com.ping.backend.service.EmailSender;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.ArgumentMatchers.anyString;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -43,8 +47,13 @@ class AuthControllerIntegrationTest {
 
     @Autowired
     private UserRepository userRepository;
+
     @Autowired
     private EmailVerificationService verificationService;
+
+    @MockitoBean
+    private EmailSender emailSender;
+
     @Test
     void register_validRequest_returns201AndPersistsUser()
             throws Exception {
@@ -281,5 +290,41 @@ class AuthControllerIntegrationTest {
 
         assertThat(unchangedUser.getEmailVerifiedAt()).isNull();
     }
+
+
+    @Test
+    void register_whenEmailDeliveryFails_stillReturns201()
+            throws Exception {
+
+        String email = "delivery-failure-" + UUID.randomUUID()
+                + "@example.com";
+
+        doThrow(new IllegalStateException("Simulated delivery failure"))
+                .when(emailSender)
+                .sendVerificationEmail(
+                        anyString(),
+                        anyString()
+                );
+
+        String requestBody = """
+            {
+              "email": "%s",
+              "password": "password123",
+              "displayName": "Test User"
+            }
+            """.formatted(email);
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.message")
+                        .value("Registration successful"));
+
+        var savedUser = userRepository.findByEmail(email);
+
+        assertThat(savedUser).isPresent();
+    }
+
 
 }

@@ -21,6 +21,7 @@ import org.mockito.Mock;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.context.ApplicationEventPublisher;
 
 @ExtendWith(MockitoExtension.class)
 class AuthServiceTest {
@@ -35,8 +36,12 @@ class AuthServiceTest {
     @Mock
     private EmailVerificationService emailVerificationService;
 
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
+
     private final RegistrationValidator registrationValidator =
             new RegistrationValidator();
+
 
     private AuthService authService;
 
@@ -46,7 +51,8 @@ class AuthServiceTest {
                 userRepository,
                 passwordEncoder,
                 registrationValidator,
-                emailVerificationService
+                emailVerificationService,
+                eventPublisher
         );
     }
 

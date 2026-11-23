@@ -22,6 +22,13 @@ import static org.mockito.Mockito.doThrow;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import com.ping.backend.service.EmailSender;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.ArgumentMatchers.eq;
+
 
 @SpringBootTest
 class AuthServiceIntegrationTest {
@@ -33,6 +40,9 @@ class AuthServiceIntegrationTest {
     static {
         postgres.start();
     }
+
+    @MockitoBean
+    private EmailSender emailSender;
 
     @Autowired
     private AuthService authService;
@@ -62,6 +72,12 @@ class AuthServiceIntegrationTest {
         );
 
         authService.register(request);
+
+        verify(emailSender, times(1))
+                .sendVerificationEmail(
+                        eq(email),
+                        any(String.class)
+                );
 
         var result = userRepository.findByEmail(email);
 
@@ -145,6 +161,12 @@ class AuthServiceIntegrationTest {
 
         assertThat(userRepository.findByEmail(email))
                 .isEmpty();
+
+        verify(emailSender, never())
+                .sendVerificationEmail(
+                        eq(email),
+                        any(String.class)
+                );
     }
 
     @Test
@@ -187,5 +209,11 @@ class AuthServiceIntegrationTest {
                 .single();
 
         assertThat(tokenCount).isZero();
+
+        verify(emailSender, never())
+                .sendVerificationEmail(
+                        eq(email),
+                        any(String.class)
+                );
     }
 }

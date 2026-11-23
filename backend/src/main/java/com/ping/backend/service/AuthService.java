@@ -12,6 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import com.ping.backend.event.EmailVerificationRequested;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -23,18 +25,23 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final RegistrationValidator registrationValidator;
     private final EmailVerificationService emailVerificationService;
+    private final ApplicationEventPublisher eventPublisher;
+
 
     public AuthService(
             UserRepository userRepository,
             PasswordEncoder passwordEncoder,
             RegistrationValidator registrationValidator,
-            EmailVerificationService emailVerificationService
+            EmailVerificationService emailVerificationService,
+            ApplicationEventPublisher eventPublisher
     ) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.registrationValidator = registrationValidator;
         this.emailVerificationService = emailVerificationService;
+        this.eventPublisher = eventPublisher;
     }
+
 
     public boolean isEmailRegistered(String email) {
         return userRepository.findByEmail(email).isPresent();
@@ -74,6 +81,15 @@ public class AuthService {
             throw new EmailAlreadyExistsException();
         }
 
-        emailVerificationService.issueToken(newUser.getId());
+
+        String rawToken = emailVerificationService.issueToken(newUser.getId());
+
+        eventPublisher.publishEvent(
+                new EmailVerificationRequested(
+                        newUser.getEmail(),
+                        rawToken
+                )
+        );
+
     }
 }

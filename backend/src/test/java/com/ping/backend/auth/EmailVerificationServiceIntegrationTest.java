@@ -17,6 +17,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
+import com.ping.backend.service.EmailSender;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 @SpringBootTest
 class EmailVerificationServiceIntegrationTest {
@@ -37,6 +39,9 @@ class EmailVerificationServiceIntegrationTest {
 
     @Autowired
     private JdbcClient jdbcClient;
+
+    @MockitoBean
+    private EmailSender emailSender;
 
     private UUID createUser() {
         UUID id = UUID.randomUUID();

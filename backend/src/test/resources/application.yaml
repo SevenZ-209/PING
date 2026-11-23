@@ -1,0 +1,4 @@
+
+resend:
+  api-key: test-api-key
+  from-email: PING <onboarding@resend.dev>

@@ -1,8 +1,10 @@
+
 spring:
   jpa:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+
   application:
     name: backend
 
@@ -13,3 +15,7 @@ spring:
 
   flyway:
     enabled: true
+
+resend:
+  api-key: ${RESEND_API_KEY}
+  from-email: ${RESEND_FROM_EMAIL:PING <onboarding@resend.dev>}

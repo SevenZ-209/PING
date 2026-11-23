@@ -9,6 +9,7 @@ import com.ping.backend.exception.InvalidRegistrationException;
 import org.junit.jupiter.api.Test;
 import java.util.UUID;
 import org.mockito.ArgumentCaptor;
+import com.ping.backend.service.EmailVerificationService;
 import java.time.Instant;
 import java.util.Optional;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -31,6 +32,9 @@ class AuthServiceTest {
     @Mock
     private PasswordEncoder passwordEncoder;
 
+    @Mock
+    private EmailVerificationService emailVerificationService;
+
     private final RegistrationValidator registrationValidator =
             new RegistrationValidator();
 
@@ -41,7 +45,8 @@ class AuthServiceTest {
         authService = new AuthService(
                 userRepository,
                 passwordEncoder,
-                registrationValidator
+                registrationValidator,
+                emailVerificationService
         );
     }
 
@@ -127,6 +132,7 @@ class AuthServiceTest {
         verify(userRepository).findByEmail(email);
         verify(userRepository, never()).saveAndFlush(any(User.class));
         verifyNoInteractions(passwordEncoder);
+        verifyNoInteractions(emailVerificationService);
     }
 
     @Test
@@ -165,6 +171,9 @@ class AuthServiceTest {
         assertThat(savedUser.getEmailVerifiedAt()).isNull();
 
         verify(passwordEncoder).encode(rawPassword);
+
+        verify(emailVerificationService, times(1))
+                .issueToken(savedUser.getId());
     }
 
     @Test
@@ -195,6 +204,9 @@ class AuthServiceTest {
 
         assertThat(userCaptor.getValue().getEmail())
                 .isEqualTo(normalizedEmail);
+
+        verify(emailVerificationService)
+                .issueToken(userCaptor.getValue().getId());
     }
 
     @Test
@@ -209,7 +221,11 @@ class AuthServiceTest {
                 .isInstanceOf(InvalidRegistrationException.class)
                 .hasMessage("Email is required");
 
-        verifyNoInteractions(userRepository, passwordEncoder);
+        verifyNoInteractions(
+                userRepository,
+                passwordEncoder,
+                emailVerificationService
+        );
     }
 
 
@@ -225,7 +241,11 @@ class AuthServiceTest {
                 .isInstanceOf(InvalidRegistrationException.class)
                 .hasMessage("Email is required");
 
-        verifyNoInteractions(userRepository, passwordEncoder);
+        verifyNoInteractions(
+                userRepository,
+                passwordEncoder,
+                emailVerificationService
+        );
     }
 
     @Test
@@ -240,7 +260,11 @@ class AuthServiceTest {
                 .isInstanceOf(InvalidRegistrationException.class)
                 .hasMessage("Invalid email format");
 
-        verifyNoInteractions(userRepository, passwordEncoder);
+        verifyNoInteractions(
+                userRepository,
+                passwordEncoder,
+                emailVerificationService
+        );
     }
 
     @Test
@@ -255,7 +279,12 @@ class AuthServiceTest {
                 .isInstanceOf(InvalidRegistrationException.class)
                 .hasMessage("Password is required");
 
-        verifyNoInteractions(userRepository, passwordEncoder);
+        verifyNoInteractions(
+                userRepository,
+                passwordEncoder,
+                emailVerificationService
+        );
+
     }
 
     @Test
@@ -270,7 +299,11 @@ class AuthServiceTest {
                 .isInstanceOf(InvalidRegistrationException.class)
                 .hasMessage("Password is required");
 
-        verifyNoInteractions(userRepository, passwordEncoder);
+        verifyNoInteractions(
+                userRepository,
+                passwordEncoder,
+                emailVerificationService
+        );
     }
 
 
@@ -301,6 +334,7 @@ class AuthServiceTest {
 
         verify(userRepository).findByEmail(email);
         verify(userRepository).saveAndFlush(any(User.class));
+        verifyNoInteractions(emailVerificationService);
     }
 
 

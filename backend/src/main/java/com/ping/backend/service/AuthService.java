@@ -7,7 +7,8 @@ import com.ping.backend.entity.User;
 import com.ping.backend.exception.EmailAlreadyExistsException;
 import com.ping.backend.repository.UserRepository;
 import com.ping.backend.validation.RegistrationValidator;
-
+import com.ping.backend.service.EmailVerificationService;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -21,15 +22,18 @@ public class AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final RegistrationValidator registrationValidator;
+    private final EmailVerificationService emailVerificationService;
 
     public AuthService(
             UserRepository userRepository,
             PasswordEncoder passwordEncoder,
-            RegistrationValidator registrationValidator
+            RegistrationValidator registrationValidator,
+            EmailVerificationService emailVerificationService
     ) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.registrationValidator = registrationValidator;
+        this.emailVerificationService = emailVerificationService;
     }
 
     public boolean isEmailRegistered(String email) {
@@ -40,6 +44,7 @@ public class AuthService {
         return passwordEncoder.encode(rawPassword);
     }
 
+    @Transactional
     public void register(RegisterRequest request) {
         ValidatedRegistration data =
                 registrationValidator.validate(request);
@@ -68,5 +73,7 @@ public class AuthService {
         } catch (DataIntegrityViolationException exception) {
             throw new EmailAlreadyExistsException();
         }
+
+        emailVerificationService.issueToken(newUser.getId());
     }
 }

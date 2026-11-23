@@ -11,8 +11,14 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.testcontainers.containers.PostgreSQLContainer;
-
+import org.springframework.jdbc.core.simple.JdbcClient;
 import java.util.UUID;
+import com.ping.backend.service.EmailVerificationService;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.reset;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -36,6 +42,12 @@ class AuthServiceIntegrationTest {
 
     @Autowired
     private PasswordEncoder passwordEncoder;
+
+    @Autowired
+    private JdbcClient jdbcClient;
+
+    @MockitoSpyBean
+    private EmailVerificationService emailVerificationService;
 
     @Test
     void register_validRequest_persistsUserInPostgres() {
@@ -70,6 +82,17 @@ class AuthServiceIntegrationTest {
         )).isTrue();
 
         assertThat(savedUser.getEmailVerifiedAt()).isNull();
+
+        Integer tokenCount = jdbcClient.sql("""
+        SELECT COUNT(*)
+        FROM email_verification_tokens
+        WHERE user_id = :userId
+        """)
+                .param("userId", savedUser.getId())
+                .query(Integer.class)
+                .single();
+
+        assertThat(tokenCount).isEqualTo(1);
     }
 
     @Test
@@ -99,5 +122,70 @@ class AuthServiceIntegrationTest {
         assertThat(result).isPresent();
         assertThat(result.orElseThrow().getDisplayName())
                 .isEqualTo("First User");
+    }
+
+    @Test
+    void register_whenTokenIssuanceFails_rollsBackUser() {
+        String email = "rollback-" + UUID.randomUUID()
+                + "@example.com";
+
+        RegisterRequest request = new RegisterRequest(
+                email,
+                "password123",
+                "Rollback User"
+        );
+
+        doThrow(new IllegalStateException("Simulated token failure"))
+                .when(emailVerificationService)
+                .issueToken(any(UUID.class));
+
+        assertThatThrownBy(() -> authService.register(request))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Simulated token failure");
+
+        assertThat(userRepository.findByEmail(email))
+                .isEmpty();
+    }
+
+    @Test
+    void register_whenFailureOccursAfterTokenInsert_rollsBackBoth() {
+        String email = "rollback-jdbc-" + UUID.randomUUID()
+                + "@example.com";
+
+        RegisterRequest request = new RegisterRequest(
+                email,
+                "password123",
+                "Rollback JDBC User"
+        );
+
+        doAnswer(invocation -> {
+            invocation.callRealMethod();
+
+            throw new IllegalStateException(
+                    "Simulated failure after token insert"
+            );
+        }).when(emailVerificationService).issueToken(any(UUID.class));
+
+        try {
+            assertThatThrownBy(() -> authService.register(request))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("Simulated failure after token insert");
+        } finally {
+            reset(emailVerificationService);
+        }
+
+        assertThat(userRepository.findByEmail(email)).isEmpty();
+
+        Integer tokenCount = jdbcClient.sql("""
+            SELECT COUNT(*)
+            FROM email_verification_tokens t
+            JOIN users u ON u.id = t.user_id
+            WHERE u.email = :email
+            """)
+                .param("email", email)
+                .query(Integer.class)
+                .single();
+
+        assertThat(tokenCount).isZero();
     }
 }

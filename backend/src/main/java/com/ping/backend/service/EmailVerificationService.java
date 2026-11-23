@@ -1,11 +1,11 @@
-
 package com.ping.backend.service;
 
+import com.ping.backend.exception.InvalidVerificationTokenException;
 import com.ping.backend.entity.EmailVerificationToken;
 import com.ping.backend.repository.EmailVerificationTokenRepository;
 import com.ping.backend.repository.UserRepository;
 import com.ping.backend.security.VerificationTokenGenerator;
-
+import com.ping.backend.entity.User;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -65,4 +65,32 @@ public class EmailVerificationService {
 
         return rawToken;
     }
+
+    @Transactional
+    public void verifyToken(String rawToken) {
+        if (rawToken == null || rawToken.isBlank()) {
+            throw new InvalidVerificationTokenException();
+        }
+
+        String tokenHash = tokenGenerator.hash(rawToken);
+
+        EmailVerificationToken token = tokenRepository
+                .findByTokenHashForUpdate(tokenHash)
+                .orElseThrow(InvalidVerificationTokenException::new);
+
+        Instant now = Instant.now();
+
+        if (token.getConsumedAt() != null
+                || token.getInvalidatedAt() != null
+                || !token.getExpiresAt().isAfter(now)) {
+            throw new InvalidVerificationTokenException();
+        }
+
+        User user = userRepository.findById(token.getUserId())
+                .orElseThrow(InvalidVerificationTokenException::new);
+
+        user.verifyEmail(now);
+        token.consume(now);
+    }
+
 }

@@ -6,7 +6,8 @@ import java.util.List;
 import java.util.UUID;
 
 public interface EmailVerificationTokenRepository
-        extends JpaRepository<EmailVerificationToken, UUID> {
+        extends JpaRepository<EmailVerificationToken, UUID>,
+        EmailVerificationTokenQueries {
 
     List<EmailVerificationToken>
     findByUserIdAndConsumedAtIsNullAndInvalidatedAtIsNull(UUID userId);

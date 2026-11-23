@@ -83,4 +83,14 @@ public class User {
     public Instant getEmailVerifiedAt() {
         return emailVerifiedAt;
     }
+
+    public void verifyEmail(Instant verifiedAt) {
+        if (this.emailVerifiedAt != null) {
+            return;
+        }
+
+        this.emailVerifiedAt = verifiedAt;
+        this.updatedAt = verifiedAt;
+    }
+
 }

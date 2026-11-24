@@ -48,4 +48,17 @@ public class GlobalExceptionHandler {
                         "Email is already registered"
                 ));
     }
+
+    @ExceptionHandler(InvalidResendVerificationException.class)
+    public ResponseEntity<ApiErrorResponse> handleInvalidResendVerification(
+            InvalidResendVerificationException exception
+    ) {
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(new ApiErrorResponse(
+                        "INVALID_RESEND_VERIFICATION",
+                        exception.getMessage()
+                ));
+    }
+
 }

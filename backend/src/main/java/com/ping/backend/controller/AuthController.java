@@ -13,7 +13,7 @@ import com.ping.backend.dto.VerifyEmailRequest;
 import jakarta.validation.Valid;
 import java.util.Map;
 import com.ping.backend.service.EmailVerificationService;
-
+import com.ping.backend.dto.auth.ResendVerificationRequest;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -55,5 +55,21 @@ public class AuthController {
                 Map.of("message", "Email verified successfully")
         );
     }
+
+
+    @PostMapping("/resend-verification")
+    public ResponseEntity<Map<String, String>> resendVerification(
+            @RequestBody ResendVerificationRequest request
+    ) {
+        emailVerificationService.resendVerification(request);
+
+        return ResponseEntity.ok(
+                Map.of(
+                        "message",
+                        "If eligible, a verification email will be sent"
+                )
+        );
+    }
+
 
 }

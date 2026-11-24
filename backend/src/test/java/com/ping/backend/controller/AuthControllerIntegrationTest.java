@@ -23,6 +23,11 @@ import com.ping.backend.service.EmailSender;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -53,6 +58,65 @@ class AuthControllerIntegrationTest {
 
     @MockitoBean
     private EmailSender emailSender;
+
+
+    private static final String RESEND_URL =
+            "/api/v1/auth/resend-verification";
+
+    private static final String RESEND_MESSAGE =
+            "If eligible, a verification email will be sent";
+
+    private UUID registerUser(String email) throws Exception {
+        String requestBody = """
+            {
+                "email": "%s",
+                "password": "password123",
+                "displayName": "Test User"
+            }
+            """.formatted(email);
+
+        mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isCreated());
+
+        clearInvocations(emailSender);
+
+        return userRepository.findByEmail(email)
+                .orElseThrow()
+                .getId();
+    }
+
+    private void moveTokensOutsideCooldown(UUID userId) {
+        OffsetDateTime createdAt =
+                OffsetDateTime.now().minusMinutes(2);
+
+        jdbcClient.sql("""
+            UPDATE email_verification_tokens
+            SET created_at = :createdAt,
+                expires_at = :expiresAt
+            WHERE user_id = :userId
+            """)
+                .param("createdAt", createdAt)
+                .param("expiresAt", createdAt.plusHours(24))
+                .param("userId", userId)
+                .update();
+    }
+
+    private void performResendRequest(String email) throws Exception {
+        String requestBody = """
+            {
+                "email": "%s"
+            }
+            """.formatted(email);
+
+        mockMvc.perform(post(RESEND_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(requestBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value(RESEND_MESSAGE));
+    }
+
 
     @Test
     void register_validRequest_returns201AndPersistsUser()
@@ -324,6 +388,130 @@ class AuthControllerIntegrationTest {
         var savedUser = userRepository.findByEmail(email);
 
         assertThat(savedUser).isPresent();
+    }
+
+    @Test
+    void resendVerification_eligibleUser_returns200AndSendsEmail()
+            throws Exception {
+
+        String email = UUID.randomUUID() + "@example.com";
+
+        UUID userId = registerUser(email);
+        moveTokensOutsideCooldown(userId);
+
+        performResendRequest(email);
+
+        verify(emailSender, times(1))
+                .sendVerificationEmail(eq(email), anyString());
+    }
+
+    @Test
+    void resendVerification_unknownEmail_returns200()
+            throws Exception {
+
+        String email = UUID.randomUUID() + "@example.com";
+
+        performResendRequest(email);
+
+        verifyNoInteractions(emailSender);
+    }
+
+    @Test
+    void resendVerification_verifiedUser_returns200()
+            throws Exception {
+
+        String email = UUID.randomUUID() + "@example.com";
+
+        UUID userId = registerUser(email);
+
+        String rawToken = verificationService.issueToken(userId);
+
+        moveTokensOutsideCooldown(userId);
+
+        verificationService.verifyToken(rawToken);
+
+        performResendRequest(email);
+
+        verifyNoInteractions(emailSender);
+    }
+
+    @Test
+    void resendVerification_withinCooldown_returns200()
+            throws Exception {
+
+        String email = UUID.randomUUID() + "@example.com";
+
+        registerUser(email);
+
+        performResendRequest(email);
+
+        verifyNoInteractions(emailSender);
+    }
+
+    @Test
+    void resendVerification_invalidEmail_returns400()
+            throws Exception {
+
+        mockMvc.perform(post(RESEND_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                            {
+                                "email": "invalid-email"
+                            }
+                            """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code")
+                        .value("INVALID_RESEND_VERIFICATION"))
+                .andExpect(jsonPath("$.message")
+                        .value("Invalid email format"));
+
+        verifyNoInteractions(emailSender);
+    }
+
+    @Test
+    void resendVerification_missingEmail_returns400()
+            throws Exception {
+
+        mockMvc.perform(post(RESEND_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code")
+                        .value("INVALID_RESEND_VERIFICATION"))
+                .andExpect(jsonPath("$.message")
+                        .value("Email is required"));
+
+        verifyNoInteractions(emailSender);
+    }
+
+    @Test
+    void resendVerification_emailDeliveryFails_stillReturns200()
+            throws Exception {
+
+        String email = UUID.randomUUID() + "@example.com";
+
+        UUID userId = registerUser(email);
+        moveTokensOutsideCooldown(userId);
+
+        doThrow(new IllegalStateException("Simulated delivery failure"))
+                .when(emailSender)
+                .sendVerificationEmail(eq(email), anyString());
+
+        performResendRequest(email);
+
+        verify(emailSender, times(1))
+                .sendVerificationEmail(eq(email), anyString());
+
+        Integer tokenCount = jdbcClient.sql("""
+            SELECT COUNT(*)
+            FROM email_verification_tokens
+            WHERE user_id = :userId
+            """)
+                .param("userId", userId)
+                .query(Integer.class)
+                .single();
+
+        assertThat(tokenCount).isEqualTo(2);
     }
 
 

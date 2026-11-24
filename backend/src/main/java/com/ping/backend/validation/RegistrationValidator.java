@@ -6,19 +6,19 @@ import com.ping.backend.exception.InvalidRegistrationException;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Locale;
-import java.util.regex.Pattern;
 
 @Component
 public class RegistrationValidator {
 
-    private static final int MAX_EMAIL_LENGTH = 255;
     private static final int MIN_PASSWORD_LENGTH = 8;
     private static final int MAX_PASSWORD_BYTES = 72;
     private static final int MAX_DISPLAY_NAME_LENGTH = 100;
+    private final EmailValidator emailValidator;
 
-    private static final Pattern EMAIL_PATTERN =
-            Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
+    public RegistrationValidator(EmailValidator emailValidator) {
+        this.emailValidator = emailValidator;
+    }
+
 
     public ValidatedRegistration validate(RegisterRequest request) {
         if (request == null) {
@@ -39,27 +39,13 @@ public class RegistrationValidator {
     }
 
     private String validateEmail(String rawEmail) {
-        if (rawEmail == null || rawEmail.isBlank()) {
+        try {
+            return emailValidator.validate(rawEmail);
+        } catch (IllegalArgumentException exception) {
             throw new InvalidRegistrationException(
-                    "Email is required"
+                    exception.getMessage()
             );
         }
-
-        String email = rawEmail.trim().toLowerCase(Locale.ROOT);
-
-        if (email.length() > MAX_EMAIL_LENGTH) {
-            throw new InvalidRegistrationException(
-                    "Email must not exceed 255 characters"
-            );
-        }
-
-        if (!EMAIL_PATTERN.matcher(email).matches()) {
-            throw new InvalidRegistrationException(
-                    "Invalid email format"
-            );
-        }
-
-        return email;
     }
 
     private String validatePassword(String password) {

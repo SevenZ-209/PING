@@ -9,7 +9,7 @@ import jakarta.persistence.criteria.CriteriaBuilder;
 import jakarta.persistence.criteria.CriteriaQuery;
 import jakarta.persistence.criteria.Root;
 import org.springframework.stereotype.Repository;
-
+import java.util.UUID;
 import java.util.Optional;
 
 @Repository
@@ -42,4 +42,25 @@ public class EmailVerificationTokenQueriesImpl
                 .getResultStream()
                 .findFirst();
     }
+
+
+    @Override
+    public Optional<UUID> findUserIdByTokenHash(String tokenHash) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+
+        CriteriaQuery<UUID> query =
+                cb.createQuery(UUID.class);
+
+        Root<EmailVerificationToken> token =
+                query.from(EmailVerificationToken.class);
+
+        query.select(token.<UUID>get("userId"))
+                .where(cb.equal(token.get("tokenHash"), tokenHash));
+
+        return entityManager.createQuery(query)
+                .getResultList()
+                .stream()
+                .findFirst();
+    }
+
 }

@@ -19,6 +19,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import com.ping.backend.service.EmailSender;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import com.ping.backend.dto.auth.ResendVerificationRequest;
+import org.mockito.ArgumentCaptor;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.times;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @SpringBootTest
 class EmailVerificationServiceIntegrationTest {
@@ -43,6 +52,9 @@ class EmailVerificationServiceIntegrationTest {
     @MockitoBean
     private EmailSender emailSender;
 
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
     private UUID createUser() {
         UUID id = UUID.randomUUID();
 
@@ -60,6 +72,35 @@ class EmailVerificationServiceIntegrationTest {
 
         return id;
     }
+
+
+    private void moveTokenOutsideCooldown(String rawToken) {
+        OffsetDateTime createdAt =
+                OffsetDateTime.now().minusMinutes(2);
+
+        jdbcClient.sql("""
+            UPDATE email_verification_tokens
+            SET created_at = :createdAt,
+                expires_at = :expiresAt
+            WHERE token_hash = :tokenHash
+            """)
+                .param("createdAt", createdAt)
+                .param("expiresAt", createdAt.plusHours(24))
+                .param("tokenHash", tokenGenerator.hash(rawToken))
+                .update();
+    }
+
+    private int countTokens(UUID userId) {
+        return jdbcClient.sql("""
+            SELECT COUNT(*)
+            FROM email_verification_tokens
+            WHERE user_id = :userId
+            """)
+                .param("userId", userId)
+                .query(Integer.class)
+                .single();
+    }
+
 
     @Test
     void issueToken_storesHashInsteadOfRawToken() {
@@ -296,6 +337,309 @@ class EmailVerificationServiceIntegrationTest {
 
         assertThat(successCount.get()).isEqualTo(1);
         assertThat(rejectedCount.get()).isEqualTo(1);
+    }
+
+    @Test
+    void resendVerification_eligibleUser_issuesNewTokenAndSendsEmail() {
+        UUID userId = createUser();
+        String email = userId + "@example.com";
+
+        String oldToken = verificationService.issueToken(userId);
+        moveTokenOutsideCooldown(oldToken);
+
+        verificationService.resendVerification(
+                new ResendVerificationRequest(email)
+        );
+
+        ArgumentCaptor<String> tokenCaptor =
+                ArgumentCaptor.forClass(String.class);
+
+        verify(emailSender).sendVerificationEmail(
+                eq(email),
+                tokenCaptor.capture()
+        );
+
+        String newToken = tokenCaptor.getValue();
+
+        assertThat(newToken).hasSize(64);
+        assertThat(newToken).isNotEqualTo(oldToken);
+        assertThat(countTokens(userId)).isEqualTo(2);
+
+        Integer invalidatedCount = jdbcClient.sql("""
+            SELECT COUNT(*)
+            FROM email_verification_tokens
+            WHERE token_hash = :tokenHash
+              AND invalidated_at IS NOT NULL
+            """)
+                .param("tokenHash", tokenGenerator.hash(oldToken))
+                .query(Integer.class)
+                .single();
+
+        assertThat(invalidatedCount).isEqualTo(1);
+
+        assertThatThrownBy(
+                () -> verificationService.verifyToken(oldToken)
+        ).isInstanceOf(InvalidVerificationTokenException.class);
+
+        verificationService.verifyToken(newToken);
+
+        OffsetDateTime verifiedAt = jdbcClient.sql("""
+            SELECT email_verified_at
+            FROM users
+            WHERE id = :userId
+            """)
+                .param("userId", userId)
+                .query(OffsetDateTime.class)
+                .single();
+
+        assertThat(verifiedAt).isNotNull();
+    }
+
+
+    @Test
+    void resendVerification_unknownEmail_doesNotSendEmail() {
+        String email = UUID.randomUUID() + "@example.com";
+
+        verificationService.resendVerification(
+                new ResendVerificationRequest(email)
+        );
+
+        verifyNoInteractions(emailSender);
+    }
+
+
+    @Test
+    void resendVerification_verifiedUser_doesNotIssueNewToken() {
+        UUID userId = createUser();
+        String email = userId + "@example.com";
+
+        String rawToken = verificationService.issueToken(userId);
+        moveTokenOutsideCooldown(rawToken);
+
+        verificationService.verifyToken(rawToken);
+
+        verificationService.resendVerification(
+                new ResendVerificationRequest(email)
+        );
+
+        assertThat(countTokens(userId)).isEqualTo(1);
+
+        verifyNoInteractions(emailSender);
+    }
+
+
+    @Test
+    void resendVerification_withinCooldown_doesNotIssueNewToken() {
+        UUID userId = createUser();
+        String email = userId + "@example.com";
+
+        String rawToken = verificationService.issueToken(userId);
+
+        verificationService.resendVerification(
+                new ResendVerificationRequest(email)
+        );
+
+        assertThat(countTokens(userId)).isEqualTo(1);
+
+        verifyNoInteractions(emailSender);
+
+        verificationService.verifyToken(rawToken);
+    }
+
+
+    @Test
+    void resendVerification_concurrentRequests_onlyOneIssuesToken()
+            throws Exception {
+
+        UUID userId = createUser();
+        String email = userId + "@example.com";
+
+        String oldToken = verificationService.issueToken(userId);
+        moveTokenOutsideCooldown(oldToken);
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+
+        var executor = Executors.newFixedThreadPool(2);
+
+        try {
+            var tasks = java.util.stream.IntStream.range(0, 2)
+                    .mapToObj(i -> executor.submit(() -> {
+                        ready.countDown();
+
+                        if (!start.await(10, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("Start timeout");
+                        }
+
+                        verificationService.resendVerification(
+                                new ResendVerificationRequest(email)
+                        );
+
+                        return null;
+                    }))
+                    .toList();
+
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            for (var task : tasks) {
+                task.get(15, TimeUnit.SECONDS);
+            }
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+
+        assertThat(countTokens(userId)).isEqualTo(2);
+
+        verify(emailSender, times(1))
+                .sendVerificationEmail(eq(email), anyString());
+    }
+
+    @Test
+    void resendVerification_concurrentWithVerify_keepsConsistentState()
+            throws Exception {
+
+        UUID userId = createUser();
+        String email = userId + "@example.com";
+
+        String oldToken = verificationService.issueToken(userId);
+        moveTokenOutsideCooldown(oldToken);
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+
+        var executor = Executors.newFixedThreadPool(2);
+
+        boolean verifySucceeded;
+
+        try {
+            var resendTask = executor.submit(() -> {
+                ready.countDown();
+
+                if (!start.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("Start timeout");
+                }
+
+                verificationService.resendVerification(
+                        new ResendVerificationRequest(email)
+                );
+
+                return null;
+            });
+
+            var verifyTask = executor.submit(() -> {
+                ready.countDown();
+
+                if (!start.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("Start timeout");
+                }
+
+                try {
+                    verificationService.verifyToken(oldToken);
+                    return true;
+                } catch (InvalidVerificationTokenException exception) {
+                    return false;
+                }
+            });
+
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            resendTask.get(15, TimeUnit.SECONDS);
+            verifySucceeded = verifyTask.get(15, TimeUnit.SECONDS);
+
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+
+        OffsetDateTime verifiedAt = jdbcClient.sql("""
+        SELECT email_verified_at
+        FROM users
+        WHERE id = :userId
+        """)
+                .param("userId", userId)
+                .query(OffsetDateTime.class)
+                .optional()
+                .orElse(null);
+
+
+        if (verifySucceeded) {
+            assertThat(verifiedAt).isNotNull();
+            assertThat(countTokens(userId)).isEqualTo(1);
+
+            verifyNoInteractions(emailSender);
+        } else {
+            assertThat(verifiedAt).isNull();
+            assertThat(countTokens(userId)).isEqualTo(2);
+
+            ArgumentCaptor<String> tokenCaptor =
+                    ArgumentCaptor.forClass(String.class);
+
+            verify(emailSender, times(1))
+                    .sendVerificationEmail(eq(email), tokenCaptor.capture());
+
+            assertThatThrownBy(
+                    () -> verificationService.verifyToken(oldToken)
+            ).isInstanceOf(InvalidVerificationTokenException.class);
+
+            verificationService.verifyToken(tokenCaptor.getValue());
+        }
+    }
+
+    @Test
+    void resendVerification_sendsEmailOnlyAfterCommit() {
+        UUID userId = createUser();
+        String email = userId + "@example.com";
+
+        String oldToken = verificationService.issueToken(userId);
+        moveTokenOutsideCooldown(oldToken);
+
+        TransactionTemplate transactionTemplate =
+                new TransactionTemplate(transactionManager);
+
+        transactionTemplate.executeWithoutResult(status -> {
+            verificationService.resendVerification(
+                    new ResendVerificationRequest(email)
+            );
+
+            verifyNoInteractions(emailSender);
+        });
+
+        verify(emailSender, times(1))
+                .sendVerificationEmail(eq(email), anyString());
+
+        assertThat(countTokens(userId)).isEqualTo(2);
+    }
+
+
+    @Test
+    void resendVerification_rollback_doesNotSendEmail() {
+        UUID userId = createUser();
+        String email = userId + "@example.com";
+
+        String oldToken = verificationService.issueToken(userId);
+        moveTokenOutsideCooldown(oldToken);
+
+        TransactionTemplate transactionTemplate =
+                new TransactionTemplate(transactionManager);
+
+        transactionTemplate.executeWithoutResult(status -> {
+            verificationService.resendVerification(
+                    new ResendVerificationRequest(email)
+            );
+
+            verifyNoInteractions(emailSender);
+
+            status.setRollbackOnly();
+        });
+
+        verifyNoInteractions(emailSender);
+
+        assertThat(countTokens(userId)).isEqualTo(1);
+
+        verificationService.verifyToken(oldToken);
     }
 
 

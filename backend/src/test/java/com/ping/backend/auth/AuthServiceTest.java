@@ -22,6 +22,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.context.ApplicationEventPublisher;
+import com.ping.backend.validation.EmailValidator;
 
 @ExtendWith(MockitoExtension.class)
 class AuthServiceTest {
@@ -40,7 +41,7 @@ class AuthServiceTest {
     private ApplicationEventPublisher eventPublisher;
 
     private final RegistrationValidator registrationValidator =
-            new RegistrationValidator();
+            new RegistrationValidator(new EmailValidator());
 
 
     private AuthService authService;

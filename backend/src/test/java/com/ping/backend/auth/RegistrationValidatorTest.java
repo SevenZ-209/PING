@@ -9,14 +9,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
-
+import com.ping.backend.validation.EmailValidator;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RegistrationValidatorTest {
 
     private final RegistrationValidator validator =
-            new RegistrationValidator();
+            new RegistrationValidator(new EmailValidator());
 
     @Test
     void validRequest_shouldNormalizeEmailAndDisplayName() {

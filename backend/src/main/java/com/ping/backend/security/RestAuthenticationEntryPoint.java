@@ -1,12 +1,11 @@
-
 package com.ping.backend.security;
 
 import com.ping.backend.dto.ApiErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
@@ -19,6 +18,9 @@ public class RestAuthenticationEntryPoint
 
     private final ObjectMapper objectMapper;
 
+    private final BearerTokenAuthenticationEntryPoint delegate =
+            new BearerTokenAuthenticationEntryPoint();
+
     public RestAuthenticationEntryPoint(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
@@ -30,7 +32,8 @@ public class RestAuthenticationEntryPoint
             AuthenticationException exception
     ) throws IOException {
 
-        response.setStatus(HttpStatus.UNAUTHORIZED.value());
+        delegate.commence(request, response, exception);
+
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
 
         ApiErrorResponse error = new ApiErrorResponse(

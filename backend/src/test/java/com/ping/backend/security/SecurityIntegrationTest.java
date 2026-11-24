@@ -12,6 +12,10 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.http.HttpHeaders;
+import static org.hamcrest.Matchers.matchesPattern;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
@@ -35,6 +39,9 @@ class SecurityIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @MockitoBean
+    private JwtDecoder jwtDecoder;
 
     @RestController
     public static class TestController {
@@ -142,16 +149,19 @@ class SecurityIntegrationTest {
                         result.getRequest().getSession(false)
                 ).isNull());
     }
-    @Test
-    void httpBasicAuthentication_isRejected()
-            throws Exception {
 
+    @Test
+    void httpBasicAuthentication_isRejected() throws Exception {
         mockMvc.perform(get("/api/v1/test/protected")
                         .with(httpBasic("test-user", "password123")))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("UNAUTHORIZED"))
-                .andExpect(header().doesNotExist("WWW-Authenticate"));
+                .andExpect(header().string(
+                        HttpHeaders.WWW_AUTHENTICATE,
+                        matchesPattern("^Bearer(?:\\s+.*)?$")
+                ));
     }
+
     @Test
     void defaultLoginPage_isNotAvailable()
             throws Exception {

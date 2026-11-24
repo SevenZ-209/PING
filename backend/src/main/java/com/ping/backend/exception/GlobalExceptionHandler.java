@@ -61,4 +61,40 @@ public class GlobalExceptionHandler {
                 ));
     }
 
+    @ExceptionHandler(InvalidLoginRequestException.class)
+    public ResponseEntity<ApiErrorResponse> handleInvalidLoginRequest(
+            InvalidLoginRequestException exception
+    ) {
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(new ApiErrorResponse(
+                        "INVALID_LOGIN_REQUEST",
+                        exception.getMessage()
+                ));
+    }
+
+    @ExceptionHandler(InvalidCredentialsException.class)
+    public ResponseEntity<ApiErrorResponse> handleInvalidCredentials(
+            InvalidCredentialsException exception
+    ) {
+        return ResponseEntity
+                .status(HttpStatus.UNAUTHORIZED)
+                .body(new ApiErrorResponse(
+                        "INVALID_CREDENTIALS",
+                        exception.getMessage()
+                ));
+    }
+
+    @ExceptionHandler(EmailNotVerifiedException.class)
+    public ResponseEntity<ApiErrorResponse> handleEmailNotVerified(
+            EmailNotVerifiedException exception
+    ) {
+        return ResponseEntity
+                .status(HttpStatus.FORBIDDEN)
+                .body(new ApiErrorResponse(
+                        "EMAIL_NOT_VERIFIED",
+                        exception.getMessage()
+                ));
+    }
+
 }

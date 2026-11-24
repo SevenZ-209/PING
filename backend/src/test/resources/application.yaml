@@ -2,3 +2,8 @@
 resend:
   api-key: test-api-key
   from-email: PING <onboarding@resend.dev>
+jwt:
+  secret: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+  issuer: ping-backend
+  audience: ping-api
+  access-token-ttl: 15m

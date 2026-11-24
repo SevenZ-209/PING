@@ -28,6 +28,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.verifyNoInteractions;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtClaimNames;
+import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.http.HttpHeaders;
+import tools.jackson.databind.ObjectMapper;
+import java.time.Duration;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -48,6 +55,12 @@ class AuthControllerIntegrationTest {
     private JdbcClient jdbcClient;
 
     @Autowired
+    private JwtDecoder jwtDecoder;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
     private VerificationTokenGenerator tokenGenerator;
 
     @Autowired
@@ -65,6 +78,43 @@ class AuthControllerIntegrationTest {
 
     private static final String RESEND_MESSAGE =
             "If eligible, a verification email will be sent";
+
+    private static final String LOGIN_URL =
+            "/api/v1/auth/login";
+
+    private static final String LOGIN_PASSWORD =
+            "password123";
+
+    private UUID registerVerifiedUser(String email) throws Exception {
+        UUID userId = registerUser(email);
+
+        String rawToken = verificationService.issueToken(userId);
+
+        verificationService.verifyToken(rawToken);
+
+        return userId;
+    }
+
+    private String generateLoginEmail() {
+        return "login-" + UUID.randomUUID() + "@example.com";
+    }
+
+    private ResultActions performLoginRequest(
+            String email,
+            String password
+    ) throws Exception {
+
+        String requestBody = objectMapper.writeValueAsString(
+                new com.ping.backend.dto.auth.LoginRequest(
+                        email,
+                        password
+                )
+        );
+
+        return mockMvc.perform(post(LOGIN_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(requestBody));
+    }
 
     private UUID registerUser(String email) throws Exception {
         String requestBody = """
@@ -514,5 +564,251 @@ class AuthControllerIntegrationTest {
         assertThat(tokenCount).isEqualTo(2);
     }
 
+    @Test
+    void login_withValidCredentials_returns200() throws Exception {
+        String email = generateLoginEmail();
+
+        registerVerifiedUser(email);
+
+        performLoginRequest(email, LOGIN_PASSWORD)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty())
+                .andExpect(jsonPath("$.tokenType").value("Bearer"))
+                .andExpect(jsonPath("$.expiresIn").value(900));
+    }
+
+    @Test
+    void login_returnsCorrectResponseStructure() throws Exception {
+        String email = generateLoginEmail();
+
+        registerVerifiedUser(email);
+
+        performLoginRequest(email, LOGIN_PASSWORD)
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(
+                        MediaType.APPLICATION_JSON
+                ))
+                .andExpect(jsonPath("$.accessToken").isString())
+                .andExpect(jsonPath("$.tokenType").value("Bearer"))
+                .andExpect(jsonPath("$.expiresIn").isNumber())
+                .andExpect(jsonPath("$.password").doesNotExist())
+                .andExpect(jsonPath("$.passwordHash").doesNotExist())
+                .andExpect(jsonPath("$.refreshToken").doesNotExist());
+    }
+
+    @Test
+    void login_returnsValidJwtAccessToken() throws Exception {
+        String email = generateLoginEmail();
+
+        UUID userId = registerVerifiedUser(email);
+
+        String responseBody = performLoginRequest(
+                email,
+                LOGIN_PASSWORD
+        )
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String accessToken = objectMapper
+                .readTree(responseBody)
+                .get("accessToken")
+                .asText();
+
+        Jwt decoded = jwtDecoder.decode(accessToken);
+
+        assertThat(decoded.getSubject())
+                .isEqualTo(userId.toString());
+
+        assertThat(decoded.getClaimAsString(JwtClaimNames.ISS))
+                .isEqualTo("ping-backend");
+
+        assertThat(decoded.getAudience())
+                .containsExactly("ping-api");
+
+        assertThat(decoded.getHeaders().get("alg"))
+                .isEqualTo("HS256");
+
+        assertThat(Duration.between(
+                decoded.getIssuedAt(),
+                decoded.getExpiresAt()
+        )).isEqualTo(Duration.ofMinutes(15));
+    }
+
+    @Test
+    void login_normalizesEmailBeforeAuthentication() throws Exception {
+        String email = generateLoginEmail();
+
+        registerVerifiedUser(email);
+
+        String rawEmail = "  "
+                + email.toUpperCase(java.util.Locale.ROOT)
+                + "  ";
+
+        performLoginRequest(rawEmail, LOGIN_PASSWORD)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty());
+    }
+
+    @Test
+    void login_withIncorrectPassword_returns401() throws Exception {
+        String email = generateLoginEmail();
+
+        registerVerifiedUser(email);
+
+        performLoginRequest(email, "wrong-password")
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code")
+                        .value("INVALID_CREDENTIALS"))
+                .andExpect(jsonPath("$.message")
+                        .value("Invalid email or password"))
+                .andExpect(jsonPath("$.accessToken").doesNotExist());
+    }
+
+    @Test
+    void login_withUnknownEmail_returns401() throws Exception {
+        String email = generateLoginEmail();
+
+        performLoginRequest(email, LOGIN_PASSWORD)
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code")
+                        .value("INVALID_CREDENTIALS"))
+                .andExpect(jsonPath("$.message")
+                        .value("Invalid email or password"))
+                .andExpect(jsonPath("$.accessToken").doesNotExist());
+    }
+
+    @Test
+    void login_whenEmailNotVerified_returns403() throws Exception {
+        String email = generateLoginEmail();
+
+        registerUser(email);
+
+        performLoginRequest(email, LOGIN_PASSWORD)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code")
+                        .value("EMAIL_NOT_VERIFIED"))
+                .andExpect(jsonPath("$.message")
+                        .value("Email address has not been verified"))
+                .andExpect(jsonPath("$.accessToken").doesNotExist());
+    }
+
+    @Test
+    void login_whenEmailNotVerifiedAndPasswordIncorrect_returns401()
+            throws Exception {
+
+        String email = generateLoginEmail();
+
+        registerUser(email);
+
+        performLoginRequest(email, "wrong-password")
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code")
+                        .value("INVALID_CREDENTIALS"))
+                .andExpect(jsonPath("$.message")
+                        .value("Invalid email or password"))
+                .andExpect(jsonPath("$.accessToken").doesNotExist());
+    }
+
+    @Test
+    void login_withInvalidEmail_returns400() throws Exception {
+        performLoginRequest("invalid-email", LOGIN_PASSWORD)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code")
+                        .value("INVALID_LOGIN_REQUEST"))
+                .andExpect(jsonPath("$.message")
+                        .value("Invalid email format"));
+    }
+
+    @Test
+    void login_withMissingEmail_returns400() throws Exception {
+        mockMvc.perform(post(LOGIN_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                            "password": "password123"
+                        }
+                        """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code")
+                        .value("INVALID_LOGIN_REQUEST"))
+                .andExpect(jsonPath("$.message")
+                        .value("Email is required"));
+    }
+
+    @Test
+    void login_withMissingPassword_returns400() throws Exception {
+        mockMvc.perform(post(LOGIN_URL)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                        {
+                            "email": "user@example.com"
+                        }
+                        """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code")
+                        .value("INVALID_LOGIN_REQUEST"))
+                .andExpect(jsonPath("$.message")
+                        .value("Password is required"));
+    }
+
+    @Test
+    void login_withBlankPassword_returns400() throws Exception {
+        performLoginRequest("user@example.com", "   ")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code")
+                        .value("INVALID_LOGIN_REQUEST"))
+                .andExpect(jsonPath("$.message")
+                        .value("Password is required"));
+    }
+
+    @Test
+    void login_withPasswordExceeding72Bytes_returns400()
+            throws Exception {
+
+        String password = "a".repeat(73);
+
+        performLoginRequest("user@example.com", password)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code")
+                        .value("INVALID_LOGIN_REQUEST"))
+                .andExpect(jsonPath("$.message")
+                        .value("Password must not exceed 72 bytes"));
+    }
+
+    @Test
+    void login_successfulResponse_disablesCaching() throws Exception {
+        String email = generateLoginEmail();
+
+        registerVerifiedUser(email);
+
+        performLoginRequest(email, LOGIN_PASSWORD)
+                .andExpect(status().isOk())
+                .andExpect(header().string(
+                        HttpHeaders.CACHE_CONTROL,
+                        "no-store"
+                ))
+                .andExpect(header().string(
+                        HttpHeaders.PRAGMA,
+                        "no-cache"
+                ));
+    }
+
+    @Test
+    void login_successfulRequest_doesNotCreateSession()
+            throws Exception {
+
+        String email = generateLoginEmail();
+
+        registerVerifiedUser(email);
+
+        var result = performLoginRequest(email, LOGIN_PASSWORD)
+                .andExpect(status().isOk())
+                .andReturn();
+
+        assertThat(result.getRequest().getSession(false))
+                .isNull();
+    }
 
 }

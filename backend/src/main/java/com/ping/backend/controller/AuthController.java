@@ -14,6 +14,10 @@ import jakarta.validation.Valid;
 import java.util.Map;
 import com.ping.backend.service.EmailVerificationService;
 import com.ping.backend.dto.auth.ResendVerificationRequest;
+import com.ping.backend.dto.auth.LoginRequest;
+import com.ping.backend.dto.auth.LoginResponse;
+import com.ping.backend.service.LoginService;
+import org.springframework.http.CacheControl;
 
 @RestController
 @RequestMapping("/api/v1/auth")
@@ -23,12 +27,16 @@ public class AuthController {
 
     private final EmailVerificationService emailVerificationService;
 
+    private final LoginService loginService;
+
     public AuthController(
             AuthService authService,
-            EmailVerificationService emailVerificationService
+            EmailVerificationService emailVerificationService,
+            LoginService loginService
     ) {
         this.authService = authService;
         this.emailVerificationService = emailVerificationService;
+        this.loginService = loginService;
     }
 
     @PostMapping("/register")
@@ -71,5 +79,16 @@ public class AuthController {
         );
     }
 
+    @PostMapping("/login")
+    public ResponseEntity<LoginResponse> login(
+            @RequestBody LoginRequest request
+    ) {
+        LoginResponse response = loginService.login(request);
+
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .header("Pragma", "no-cache")
+                .body(response);
+    }
 
 }

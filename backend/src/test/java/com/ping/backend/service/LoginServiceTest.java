@@ -10,6 +10,7 @@ import com.ping.backend.exception.InvalidLoginRequestException;
 import com.ping.backend.security.PingUserDetails;
 import com.ping.backend.validation.EmailValidator;
 import com.ping.backend.validation.LoginValidator;
+import com.ping.backend.dto.auth.RefreshTokenIssuanceResult;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,6 +45,9 @@ class LoginServiceTest {
     @Mock
     private JwtTokenService jwtTokenService;
 
+    @Mock
+    private RefreshTokenIssuanceService refreshTokenIssuanceService;
+
     private final LoginValidator loginValidator =
             new LoginValidator(new EmailValidator());
 
@@ -52,6 +56,23 @@ class LoginServiceTest {
     private final String email = "user@example.com";
     private final String password = "password123";
     private final String token = "test-access-token";
+    private final String rawRefreshToken = "A".repeat(43);
+
+    private final UUID sessionId = UUID.randomUUID();
+
+    private final Instant refreshTokenExpiresAt =
+            Instant.parse("2026-12-01T00:00:00Z");
+
+    private final Instant sessionExpiresAt =
+            Instant.parse("2027-01-30T00:00:00Z");
+
+    private final RefreshTokenIssuanceResult issuanceResult =
+            new RefreshTokenIssuanceResult(
+                    rawRefreshToken,
+                    sessionId,
+                    refreshTokenExpiresAt,
+                    sessionExpiresAt
+            );
 
     private LoginService loginService;
 
@@ -60,7 +81,8 @@ class LoginServiceTest {
         loginService = new LoginService(
                 loginValidator,
                 authenticationManager,
-                jwtTokenService
+                jwtTokenService,
+                refreshTokenIssuanceService
         );
     }
 
@@ -97,13 +119,19 @@ class LoginServiceTest {
         return new LoginRequest(email, password);
     }
 
+
     private void mockSuccessfulLogin() {
         when(authenticationManager.authenticate(any(Authentication.class)))
                 .thenReturn(createAuthentication(true));
 
         when(jwtTokenService.generateAccessToken(userId))
                 .thenReturn(new AccessToken(token, 900L));
+
+        when(refreshTokenIssuanceService.issue(userId))
+                .thenReturn(issuanceResult);
     }
+
+
 
     @Test
     void login_withValidCredentials_returnsLoginResponse() {
@@ -112,15 +140,32 @@ class LoginServiceTest {
         LoginResponse response =
                 loginService.login(createLoginRequest());
 
-        assertThat(response.accessToken()).isEqualTo(token);
-        assertThat(response.tokenType()).isEqualTo("Bearer");
-        assertThat(response.expiresIn()).isEqualTo(900L);
+        assertThat(response.accessToken())
+                .isEqualTo(token);
+
+        assertThat(response.tokenType())
+                .isEqualTo("Bearer");
+
+        assertThat(response.expiresIn())
+                .isEqualTo(900L);
+
+        assertThat(response.refreshToken())
+                .isEqualTo(rawRefreshToken);
+
+        assertThat(response.refreshTokenExpiresAt())
+                .isEqualTo(refreshTokenExpiresAt);
+
+        assertThat(response.sessionExpiresAt())
+                .isEqualTo(sessionExpiresAt);
 
         verify(authenticationManager)
                 .authenticate(any(Authentication.class));
 
         verify(jwtTokenService)
                 .generateAccessToken(userId);
+
+        verify(refreshTokenIssuanceService)
+                .issue(userId);
     }
 
     @Test
@@ -179,7 +224,8 @@ class LoginServiceTest {
 
         verifyNoInteractions(
                 authenticationManager,
-                jwtTokenService
+                jwtTokenService,
+                refreshTokenIssuanceService
         );
     }
 
@@ -193,7 +239,8 @@ class LoginServiceTest {
 
         verifyNoInteractions(
                 authenticationManager,
-                jwtTokenService
+                jwtTokenService,
+                refreshTokenIssuanceService
         );
     }
 
@@ -208,7 +255,10 @@ class LoginServiceTest {
                 .isInstanceOf(InvalidCredentialsException.class)
                 .hasMessage("Invalid email or password");
 
-        verifyNoInteractions(jwtTokenService);
+        verifyNoInteractions(
+                jwtTokenService,
+                refreshTokenIssuanceService
+        );
     }
 
     @Test
@@ -222,7 +272,10 @@ class LoginServiceTest {
                 .isInstanceOf(InvalidCredentialsException.class)
                 .hasMessage("Invalid email or password");
 
-        verifyNoInteractions(jwtTokenService);
+        verifyNoInteractions(
+                jwtTokenService,
+                refreshTokenIssuanceService
+        );
     }
     @Test
     void login_whenEmailNotVerified_throwsEmailNotVerifiedException() {
@@ -238,7 +291,10 @@ class LoginServiceTest {
         verify(authenticationManager)
                 .authenticate(any(Authentication.class));
 
-        verifyNoInteractions(jwtTokenService);
+        verifyNoInteractions(
+                jwtTokenService,
+                refreshTokenIssuanceService
+        );
     }
 
     @Test
@@ -259,7 +315,10 @@ class LoginServiceTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Unexpected authentication principal");
 
-        verifyNoInteractions(jwtTokenService);
+        verifyNoInteractions(
+                jwtTokenService,
+                refreshTokenIssuanceService
+        );
     }
     @Test
     void login_whenAuthenticationSystemFails_propagatesException() {
@@ -275,8 +334,12 @@ class LoginServiceTest {
                 loginService.login(createLoginRequest())
         ).isSameAs(exception);
 
-        verifyNoInteractions(jwtTokenService);
+        verifyNoInteractions(
+                jwtTokenService,
+                refreshTokenIssuanceService
+        );
     }
+
     @Test
     void login_whenTokenGenerationFails_propagatesException() {
         when(authenticationManager.authenticate(any(Authentication.class)))
@@ -291,10 +354,17 @@ class LoginServiceTest {
         assertThatThrownBy(() ->
                 loginService.login(createLoginRequest())
         ).isSameAs(exception);
+
+        verify(jwtTokenService)
+                .generateAccessToken(userId);
+
+        verifyNoInteractions(refreshTokenIssuanceService);
     }
 
+
+
     @Test
-    void loginResponseToString_doesNotExposeAccessToken() {
+    void loginResponseToString_doesNotExposeCredentials() {
         mockSuccessfulLogin();
 
         LoginResponse response =
@@ -302,20 +372,27 @@ class LoginServiceTest {
 
         assertThat(response.toString())
                 .doesNotContain(token)
-                .contains("REDACTED")
+                .doesNotContain(rawRefreshToken)
+                .contains("accessToken=REDACTED")
+                .contains("refreshToken=REDACTED")
                 .contains("tokenType=Bearer")
-                .contains("expiresIn=900");
+                .contains("expiresIn=900")
+                .contains("refreshTokenExpiresAt=" + refreshTokenExpiresAt)
+                .contains("sessionExpiresAt=" + sessionExpiresAt);
     }
 
+
+
     @Test
-    void login_authenticatesBeforeGeneratingToken() {
+    void login_authenticatesBeforeIssuingTokens() {
         mockSuccessfulLogin();
 
         loginService.login(createLoginRequest());
 
         InOrder inOrder = inOrder(
                 authenticationManager,
-                jwtTokenService
+                jwtTokenService,
+                refreshTokenIssuanceService
         );
 
         inOrder.verify(authenticationManager)
@@ -324,8 +401,55 @@ class LoginServiceTest {
         inOrder.verify(jwtTokenService)
                 .generateAccessToken(userId);
 
-        inOrder.verifyNoMoreInteractions();
+        inOrder.verify(refreshTokenIssuanceService)
+                .issue(userId);
+
+        verifyNoMoreInteractions(
+                authenticationManager,
+                jwtTokenService,
+                refreshTokenIssuanceService
+        );
     }
 
+
+    @Test
+    void login_whenRefreshTokenIssuanceFails_propagatesException() {
+        when(authenticationManager.authenticate(any(Authentication.class)))
+                .thenReturn(createAuthentication(true));
+
+        when(jwtTokenService.generateAccessToken(userId))
+                .thenReturn(new AccessToken(token, 900L));
+
+        IllegalStateException exception =
+                new IllegalStateException("Refresh token issuance failed");
+
+        when(refreshTokenIssuanceService.issue(userId))
+                .thenThrow(exception);
+
+        assertThatThrownBy(() ->
+                loginService.login(createLoginRequest())
+        ).isSameAs(exception);
+
+        InOrder inOrder = inOrder(
+                authenticationManager,
+                jwtTokenService,
+                refreshTokenIssuanceService
+        );
+
+        inOrder.verify(authenticationManager)
+                .authenticate(any(Authentication.class));
+
+        inOrder.verify(jwtTokenService)
+                .generateAccessToken(userId);
+
+        inOrder.verify(refreshTokenIssuanceService)
+                .issue(userId);
+
+        verifyNoMoreInteractions(
+                authenticationManager,
+                jwtTokenService,
+                refreshTokenIssuanceService
+        );
+    }
 
 }

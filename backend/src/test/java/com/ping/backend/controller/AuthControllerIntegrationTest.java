@@ -35,6 +35,11 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.http.HttpHeaders;
 import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
+import java.time.Instant;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
+import java.util.List;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -84,6 +89,14 @@ class AuthControllerIntegrationTest {
 
     private static final String LOGIN_PASSWORD =
             "password123";
+
+    private String hashRefreshToken(String rawToken) throws Exception {
+        byte[] hash = MessageDigest.getInstance("SHA-256")
+                .digest(rawToken.getBytes(StandardCharsets.UTF_8));
+
+        return HexFormat.of().formatHex(hash);
+    }
+
 
     private UUID registerVerifiedUser(String email) throws Exception {
         UUID userId = registerUser(email);
@@ -166,6 +179,145 @@ class AuthControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value(RESEND_MESSAGE));
     }
+
+    private long countAuthSessions(UUID userId) {
+        return jdbcClient.sql("""
+            SELECT COUNT(*)
+            FROM auth_sessions
+            WHERE user_id = :userId
+            """)
+                .param("userId", userId)
+                .query(Long.class)
+                .single();
+    }
+
+    private long countRefreshTokens(UUID userId) {
+        return jdbcClient.sql("""
+            SELECT COUNT(*)
+            FROM auth_refresh_tokens rt
+            JOIN auth_sessions s ON s.id = rt.session_id
+            WHERE s.user_id = :userId
+            """)
+                .param("userId", userId)
+                .query(Long.class)
+                .single();
+    }
+
+
+    @Test
+    void login_multipleRequests_createIndependentSessions()
+            throws Exception {
+
+        String email = generateLoginEmail();
+
+        UUID userId = registerVerifiedUser(email);
+
+        assertThat(countAuthSessions(userId)).isZero();
+        assertThat(countRefreshTokens(userId)).isZero();
+
+        String firstResponseBody =
+                performLoginRequest(email, LOGIN_PASSWORD)
+                        .andExpect(status().isOk())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString();
+
+        assertThat(countAuthSessions(userId)).isEqualTo(1);
+        assertThat(countRefreshTokens(userId)).isEqualTo(1);
+
+        String secondResponseBody =
+                performLoginRequest(email, LOGIN_PASSWORD)
+                        .andExpect(status().isOk())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString();
+
+        String firstRawToken = objectMapper
+                .readTree(firstResponseBody)
+                .get("refreshToken")
+                .asText();
+
+        String secondRawToken = objectMapper
+                .readTree(secondResponseBody)
+                .get("refreshToken")
+                .asText();
+
+        assertThat(firstRawToken)
+                .isNotEqualTo(secondRawToken);
+
+        String firstHash = hashRefreshToken(firstRawToken);
+        String secondHash = hashRefreshToken(secondRawToken);
+
+        assertThat(countAuthSessions(userId)).isEqualTo(2);
+        assertThat(countRefreshTokens(userId)).isEqualTo(2);
+
+        List<UUID> sessionIds = jdbcClient.sql("""
+            SELECT id
+            FROM auth_sessions
+            WHERE user_id = :userId
+            """)
+                .param("userId", userId)
+                .query(UUID.class)
+                .list();
+
+        assertThat(sessionIds)
+                .hasSize(2)
+                .doesNotHaveDuplicates();
+
+        List<String> tokenHashes = jdbcClient.sql("""
+            SELECT rt.token_hash
+            FROM auth_refresh_tokens rt
+            JOIN auth_sessions s ON s.id = rt.session_id
+            WHERE s.user_id = :userId
+            """)
+                .param("userId", userId)
+                .query(String.class)
+                .list();
+
+        assertThat(tokenHashes)
+                .containsExactlyInAnyOrder(firstHash, secondHash);
+
+        List<UUID> tokenSessionIds = jdbcClient.sql("""
+            SELECT rt.session_id
+            FROM auth_refresh_tokens rt
+            JOIN auth_sessions s ON s.id = rt.session_id
+            WHERE s.user_id = :userId
+            """)
+                .param("userId", userId)
+                .query(UUID.class)
+                .list();
+
+        assertThat(tokenSessionIds)
+                .containsExactlyInAnyOrderElementsOf(sessionIds);
+
+        long activeSessionCount = jdbcClient.sql("""
+            SELECT COUNT(*)
+            FROM auth_sessions
+            WHERE user_id = :userId
+                AND revoked_at IS NULL
+                AND expires_at > CURRENT_TIMESTAMP
+            """)
+                .param("userId", userId)
+                .query(Long.class)
+                .single();
+
+        assertThat(activeSessionCount).isEqualTo(2);
+
+        long activeTokenCount = jdbcClient.sql("""
+            SELECT COUNT(*)
+            FROM auth_refresh_tokens rt
+            JOIN auth_sessions s ON s.id = rt.session_id
+            WHERE s.user_id = :userId
+                AND rt.consumed_at IS NULL
+                AND rt.expires_at > CURRENT_TIMESTAMP
+            """)
+                .param("userId", userId)
+                .query(Long.class)
+                .single();
+
+        assertThat(activeTokenCount).isEqualTo(2);
+    }
+
 
 
     @Test
@@ -564,18 +716,106 @@ class AuthControllerIntegrationTest {
         assertThat(tokenCount).isEqualTo(2);
     }
 
+
+
     @Test
-    void login_withValidCredentials_returns200() throws Exception {
+    void login_withValidCredentials_returns200AndPersistsTokens()
+            throws Exception {
+
         String email = generateLoginEmail();
 
-        registerVerifiedUser(email);
+        UUID userId = registerVerifiedUser(email);
 
-        performLoginRequest(email, LOGIN_PASSWORD)
+        assertThat(countAuthSessions(userId)).isZero();
+        assertThat(countRefreshTokens(userId)).isZero();
+
+        String responseBody = performLoginRequest(email, LOGIN_PASSWORD)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accessToken").isNotEmpty())
                 .andExpect(jsonPath("$.tokenType").value("Bearer"))
-                .andExpect(jsonPath("$.expiresIn").value(900));
+                .andExpect(jsonPath("$.expiresIn").value(900))
+                .andExpect(jsonPath("$.refreshToken").isNotEmpty())
+                .andExpect(jsonPath("$.refreshTokenExpiresAt").isString())
+                .andExpect(jsonPath("$.sessionExpiresAt").isString())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        var response = objectMapper.readTree(responseBody);
+
+        String rawToken = response.get("refreshToken").asText();
+
+        String expectedHash = hashRefreshToken(rawToken);
+
+        Instant refreshTokenExpiresAt = Instant.parse(
+                response.get("refreshTokenExpiresAt").asText()
+        );
+
+        Instant sessionExpiresAt = Instant.parse(
+                response.get("sessionExpiresAt").asText()
+        );
+
+        assertThat(countAuthSessions(userId)).isEqualTo(1);
+        assertThat(countRefreshTokens(userId)).isEqualTo(1);
+
+        jdbcClient.sql("""
+            SELECT
+                s.user_id,
+                s.created_at AS session_created_at,
+                s.expires_at AS session_expires_at,
+                s.revoked_at,
+                rt.token_hash,
+                rt.created_at AS token_created_at,
+                rt.expires_at AS token_expires_at,
+                rt.consumed_at
+            FROM auth_sessions s
+            JOIN auth_refresh_tokens rt
+                ON rt.session_id = s.id
+            WHERE s.user_id = :userId
+            """)
+                .param("userId", userId)
+                .query((rs, rowNum) -> {
+                    assertThat(rs.getObject("user_id", UUID.class))
+                            .isEqualTo(userId);
+
+                    assertThat(rs.getString("token_hash"))
+                            .isEqualTo(expectedHash)
+                            .isNotEqualTo(rawToken)
+                            .hasSize(64);
+
+                    Instant sessionCreatedAt = rs.getObject(
+                            "session_created_at",
+                            OffsetDateTime.class
+                    ).toInstant();
+
+                    Instant tokenCreatedAt = rs.getObject(
+                            "token_created_at",
+                            OffsetDateTime.class
+                    ).toInstant();
+
+                    assertThat(tokenCreatedAt)
+                            .isEqualTo(sessionCreatedAt);
+
+                    assertThat(rs.getObject(
+                            "session_expires_at",
+                            OffsetDateTime.class
+                    ).toInstant()).isEqualTo(sessionExpiresAt);
+
+                    assertThat(rs.getObject(
+                            "token_expires_at",
+                            OffsetDateTime.class
+                    ).toInstant()).isEqualTo(refreshTokenExpiresAt);
+
+                    assertThat(rs.getObject("revoked_at")).isNull();
+
+                    assertThat(rs.getObject("consumed_at")).isNull();
+
+                    return true;
+                })
+                .single();
     }
+
+
 
     @Test
     void login_returnsCorrectResponseStructure() throws Exception {
@@ -583,7 +823,7 @@ class AuthControllerIntegrationTest {
 
         registerVerifiedUser(email);
 
-        performLoginRequest(email, LOGIN_PASSWORD)
+        String responseBody = performLoginRequest(email, LOGIN_PASSWORD)
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(
                         MediaType.APPLICATION_JSON
@@ -591,10 +831,41 @@ class AuthControllerIntegrationTest {
                 .andExpect(jsonPath("$.accessToken").isString())
                 .andExpect(jsonPath("$.tokenType").value("Bearer"))
                 .andExpect(jsonPath("$.expiresIn").isNumber())
+                .andExpect(jsonPath("$.refreshToken").isString())
+                .andExpect(jsonPath("$.refreshTokenExpiresAt").isString())
+                .andExpect(jsonPath("$.sessionExpiresAt").isString())
                 .andExpect(jsonPath("$.password").doesNotExist())
                 .andExpect(jsonPath("$.passwordHash").doesNotExist())
-                .andExpect(jsonPath("$.refreshToken").doesNotExist());
+                .andExpect(jsonPath("$.tokenHash").doesNotExist())
+                .andExpect(jsonPath("$.sessionId").doesNotExist())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        var response = objectMapper.readTree(responseBody);
+
+        assertThat(response.size()).isEqualTo(6);
+
+        assertThat(response.get("refreshToken").asText())
+                .hasSize(43)
+                .matches("[A-Za-z0-9_-]{43}");
+
+        Instant refreshTokenExpiresAt = Instant.parse(
+                response.get("refreshTokenExpiresAt").asText()
+        );
+
+        Instant sessionExpiresAt = Instant.parse(
+                response.get("sessionExpiresAt").asText()
+        );
+
+        assertThat(refreshTokenExpiresAt)
+                .isAfter(Instant.now())
+                .isBeforeOrEqualTo(sessionExpiresAt);
+
+        assertThat(sessionExpiresAt)
+                .isAfter(Instant.now());
     }
+
 
     @Test
     void login_returnsValidJwtAccessToken() throws Exception {
@@ -651,11 +922,15 @@ class AuthControllerIntegrationTest {
                 .andExpect(jsonPath("$.accessToken").isNotEmpty());
     }
 
+
     @Test
     void login_withIncorrectPassword_returns401() throws Exception {
         String email = generateLoginEmail();
 
-        registerVerifiedUser(email);
+        UUID userId = registerVerifiedUser(email);
+
+        assertThat(countAuthSessions(userId)).isZero();
+        assertThat(countRefreshTokens(userId)).isZero();
 
         performLoginRequest(email, "wrong-password")
                 .andExpect(status().isUnauthorized())
@@ -663,8 +938,13 @@ class AuthControllerIntegrationTest {
                         .value("INVALID_CREDENTIALS"))
                 .andExpect(jsonPath("$.message")
                         .value("Invalid email or password"))
-                .andExpect(jsonPath("$.accessToken").doesNotExist());
+                .andExpect(jsonPath("$.accessToken").doesNotExist())
+                .andExpect(jsonPath("$.refreshToken").doesNotExist());
+
+        assertThat(countAuthSessions(userId)).isZero();
+        assertThat(countRefreshTokens(userId)).isZero();
     }
+
 
     @Test
     void login_withUnknownEmail_returns401() throws Exception {
@@ -676,14 +956,19 @@ class AuthControllerIntegrationTest {
                         .value("INVALID_CREDENTIALS"))
                 .andExpect(jsonPath("$.message")
                         .value("Invalid email or password"))
-                .andExpect(jsonPath("$.accessToken").doesNotExist());
+                .andExpect(jsonPath("$.accessToken").doesNotExist())
+                .andExpect(jsonPath("$.refreshToken").doesNotExist());
     }
+
 
     @Test
     void login_whenEmailNotVerified_returns403() throws Exception {
         String email = generateLoginEmail();
 
-        registerUser(email);
+        UUID userId = registerUser(email);
+
+        assertThat(countAuthSessions(userId)).isZero();
+        assertThat(countRefreshTokens(userId)).isZero();
 
         performLoginRequest(email, LOGIN_PASSWORD)
                 .andExpect(status().isForbidden())
@@ -691,8 +976,13 @@ class AuthControllerIntegrationTest {
                         .value("EMAIL_NOT_VERIFIED"))
                 .andExpect(jsonPath("$.message")
                         .value("Email address has not been verified"))
-                .andExpect(jsonPath("$.accessToken").doesNotExist());
+                .andExpect(jsonPath("$.accessToken").doesNotExist())
+                .andExpect(jsonPath("$.refreshToken").doesNotExist());
+
+        assertThat(countAuthSessions(userId)).isZero();
+        assertThat(countRefreshTokens(userId)).isZero();
     }
+
 
     @Test
     void login_whenEmailNotVerifiedAndPasswordIncorrect_returns401()
@@ -708,7 +998,8 @@ class AuthControllerIntegrationTest {
                         .value("INVALID_CREDENTIALS"))
                 .andExpect(jsonPath("$.message")
                         .value("Invalid email or password"))
-                .andExpect(jsonPath("$.accessToken").doesNotExist());
+                .andExpect(jsonPath("$.accessToken").doesNotExist())
+                .andExpect(jsonPath("$.refreshToken").doesNotExist());
     }
 
     @Test
@@ -795,8 +1086,9 @@ class AuthControllerIntegrationTest {
                 ));
     }
 
+
     @Test
-    void login_successfulRequest_doesNotCreateSession()
+    void login_successfulRequest_doesNotCreateHttpSession()
             throws Exception {
 
         String email = generateLoginEmail();
@@ -810,5 +1102,6 @@ class AuthControllerIntegrationTest {
         assertThat(result.getRequest().getSession(false))
                 .isNull();
     }
+
 
 }

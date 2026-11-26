@@ -1,8 +1,10 @@
+
 package com.ping.backend.service;
 
 import com.ping.backend.dto.auth.AccessToken;
 import com.ping.backend.dto.auth.LoginRequest;
 import com.ping.backend.dto.auth.LoginResponse;
+import com.ping.backend.dto.auth.RefreshTokenIssuanceResult;
 import com.ping.backend.dto.auth.ValidatedLogin;
 import com.ping.backend.exception.EmailNotVerifiedException;
 import com.ping.backend.exception.InvalidCredentialsException;
@@ -21,15 +23,18 @@ public class LoginService {
     private final LoginValidator loginValidator;
     private final AuthenticationManager authenticationManager;
     private final JwtTokenService jwtTokenService;
+    private final RefreshTokenIssuanceService refreshTokenIssuanceService;
 
     public LoginService(
             LoginValidator loginValidator,
             AuthenticationManager authenticationManager,
-            JwtTokenService jwtTokenService
+            JwtTokenService jwtTokenService,
+            RefreshTokenIssuanceService refreshTokenIssuanceService
     ) {
         this.loginValidator = loginValidator;
         this.authenticationManager = authenticationManager;
         this.jwtTokenService = jwtTokenService;
+        this.refreshTokenIssuanceService = refreshTokenIssuanceService;
     }
 
     public LoginResponse login(LoginRequest request) {
@@ -59,10 +64,16 @@ public class LoginService {
         AccessToken accessToken =
                 jwtTokenService.generateAccessToken(userDetails.getId());
 
+        RefreshTokenIssuanceResult refreshToken =
+                refreshTokenIssuanceService.issue(userDetails.getId());
+
         return new LoginResponse(
                 accessToken.token(),
                 "Bearer",
-                accessToken.expiresIn()
+                accessToken.expiresIn(),
+                refreshToken.rawRefreshToken(),
+                refreshToken.refreshTokenExpiresAt(),
+                refreshToken.sessionExpiresAt()
         );
     }
 }
